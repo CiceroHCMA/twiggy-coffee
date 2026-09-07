@@ -3,12 +3,13 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Twiggy Coffee | 烘豆成本核算與 Google Sheet 雲端日誌</title>
+  <title>Twiggy Coffee | 烘豆成本核算與日誌</title>
   
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&family=Noto+Serif+TC:wght@500;700&display=swap" rel="stylesheet">
 
+  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -31,101 +32,68 @@
     }
   </script>
 
-  <script>window.process = { env: { NODE_ENV: 'production' } };</script>
-  <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
-  <script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"></script>
+  <!-- React 18, Babel, SheetJS -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
 </head>
 <body class="bg-roast-50 text-roast-900 font-sans antialiased min-h-screen">
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useMemo, useEffect, Component } = React;
+    const { useState, useMemo, useEffect, useRef } = React;
 
-    // Boundary to catch and display any unexpected React crash instead of blank screen
-    class ErrorBoundary extends Component {
-      constructor(props) {
-        super(props);
-        this.state = { hasError: false, error: null };
-      }
-      static getDerivedStateFromError(error) {
-        return { hasError: true, error };
-      }
-      componentDidCatch(error, errorInfo) {
-        console.error("React Crash Intercepted:", error, errorInfo);
-      }
-      render() {
-        if (this.state.hasError) {
-          return (
-            <div className="max-w-xl mx-auto my-12 p-6 bg-white rounded-2xl border border-rose-200 shadow-lg text-center space-y-4">
-              <h2 className="text-lg font-bold text-rose-600">系統載入異常 (Runtime Error)</h2>
-              <p className="text-xs text-stone-600 font-mono bg-stone-100 p-3 rounded-lg break-all text-left">
-                {this.state.error?.toString()}
-              </p>
-              <button 
-                onClick={() => { localStorage.clear(); window.location.reload(); }}
-                className="px-4 py-2 bg-roast-950 text-white rounded-xl text-xs font-bold hover:bg-black transition"
-              >
-                重設快取並重新載入 (Reset Cache & Reload)
-              </button>
-            </div>
-          );
-        }
-        return this.props.children;
-      }
-    }
+    const INITIAL_BEANS = [
+      { id: "1", origin: "Twiggy Signature Blend", rawGreenCost: 12.5, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 },
+      { id: "2", origin: "Colombia Huila Single Origin", rawGreenCost: 11.2, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 },
+      { id: "3", origin: "Ethiopia Yirgacheffe Washed G1", rawGreenCost: 14.5, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 },
+      { id: "4", origin: "Guatemala Antigua Pastoral", rawGreenCost: 10.8, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 },
+      { id: "1788429949083", origin: "萨尔瓦多圣华金庄园红波旁日晒", rawGreenCost: 124, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 },
+      { id: "1788430165521", origin: "巴布亚新几内亚哈根山AX水洗", rawGreenCost: 82, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 },
+      { id: "1788430233158", origin: "哥斯达黎加塔拉珠SHB水洗", rawGreenCost: 92, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 },
+      { id: "1788430858975", origin: "哥倫比亞 白山莊園 西瓜酵母發酵水洗", rawGreenCost: 220, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 },
+      { id: "1788430929673", origin: "埃塞俄比亞 西達摩 班莎 G1 酵母厭氧日曬", rawGreenCost: 175, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 }
+    ];
 
-    const DEFAULT_DATA = {
-      beans: [
-        { id: "1", origin: "Twiggy Signature Blend", rawGreenCost: 12.5, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 },
-        { id: "2", origin: "Colombia Huila Single Origin", rawGreenCost: 11.2, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 },
-        { id: "3", origin: "Ethiopia Yirgacheffe Washed G1", rawGreenCost: 14.5, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 },
-        { id: "4", origin: "Guatemala Antigua Pastoral", rawGreenCost: 10.8, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 },
-        { id: "1788429949083", origin: "萨尔瓦多圣华金庄园红波旁日晒", rawGreenCost: 124, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 },
-        { id: "1788430165521", origin: "巴布亚新几内亚哈根山AX水洗", rawGreenCost: 82, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 },
-        { id: "1788430233158", origin: "哥斯达黎加塔拉珠SHB水洗", rawGreenCost: 92, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 },
-        { id: "1788430858975", origin: "哥倫比亞 白山莊園 西瓜酵母發酵水洗", rawGreenCost: 220, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 },
-        { id: "1788430929673", origin: "埃塞俄比亞 西達摩 班莎 G1 酵母厭氧日曬", rawGreenCost: 175, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 }
-      ],
-      batches: [
-        { id: 1788430933088, date: "2026-09-03", origin: "埃塞俄比亞 西達摩 班莎 G1 酵母厭氧日曬", greenKg: 2.5, roastedKg: 2.1, totalBatchCost: 988, cogsPerRoastedKg: 470.48, lossPct: 16, targetMarginPct: 50, bagSizeGrams: 100, suggestedPricePerKg: 940.95, suggestedRetailPerBag: 94.1 },
-        { id: 1788430868026, date: "2026-09-03", origin: "哥倫比亞 白山莊園 西瓜酵母發酵水洗", greenKg: 2.5, roastedKg: 2.1, totalBatchCost: 1100.5, cogsPerRoastedKg: 524.05, lossPct: 16, targetMarginPct: 50, bagSizeGrams: 100, suggestedPricePerKg: 1048.1, suggestedRetailPerBag: 104.81 },
-        { id: 1788430262791, date: "2026-09-03", origin: "哥斯达黎加塔拉珠SHB水洗", greenKg: 2.5, roastedKg: 2.13, totalBatchCost: 568.75, cogsPerRoastedKg: 267.65, lossPct: 15, targetMarginPct: 50, bagSizeGrams: 100, suggestedPricePerKg: 535.29, suggestedRetailPerBag: 53.53 },
-        { id: 1788430179948, date: "2026-09-03", origin: "巴布亚新几内亚哈根山AX水洗", greenKg: 2.5, roastedKg: 2.1, totalBatchCost: 540.5, cogsPerRoastedKg: 257.38, lossPct: 16, targetMarginPct: 50, bagSizeGrams: 100, suggestedPricePerKg: 514.76, suggestedRetailPerBag: 51.48 },
-        { id: 1788429964931, date: "2026-09-03", origin: "萨尔瓦多圣华金庄园红波旁日晒", greenKg: 2.5, roastedKg: 2.13, totalBatchCost: 648.75, cogsPerRoastedKg: 305.29, lossPct: 15, targetMarginPct: 50, bagSizeGrams: 100, suggestedPricePerKg: 610.59, suggestedRetailPerBag: 61.06 }
-      ]
-    };
+    const INITIAL_BATCHES = [
+      { id: 1788430933088, date: "2026-09-03", origin: "埃塞俄比亞 西達摩 班莎 G1 酵母厭氧日曬", greenKg: 2.5, roastedKg: 2.1, totalBatchCost: 988, cogsPerRoastedKg: 470.48, lossPct: 16, targetMarginPct: 50, bagSizeGrams: 100, suggestedPricePerKg: 940.95, suggestedRetailPerBag: 94.1 },
+      { id: 1788430868026, date: "2026-09-03", origin: "哥倫比亞 白山莊園 西瓜酵母發酵水洗", greenKg: 2.5, roastedKg: 2.1, totalBatchCost: 1100.5, cogsPerRoastedKg: 524.05, lossPct: 16, targetMarginPct: 50, bagSizeGrams: 100, suggestedPricePerKg: 1048.1, suggestedRetailPerBag: 104.81 },
+      { id: 1788430262791, date: "2026-09-03", origin: "哥斯达黎加塔拉珠SHB水洗", greenKg: 2.5, roastedKg: 2.13, totalBatchCost: 568.75, cogsPerRoastedKg: 267.65, lossPct: 15, targetMarginPct: 50, bagSizeGrams: 100, suggestedPricePerKg: 535.29, suggestedRetailPerBag: 53.53 },
+      { id: 1788430179948, date: "2026-09-03", origin: "巴布亚新几内亚哈根山AX水洗", greenKg: 2.5, roastedKg: 2.1, totalBatchCost: 540.5, cogsPerRoastedKg: 257.38, lossPct: 16, targetMarginPct: 50, bagSizeGrams: 100, suggestedPricePerKg: 514.76, suggestedRetailPerBag: 51.48 },
+      { id: 1788429964931, date: "2026-09-03", origin: "萨尔瓦多圣华金庄园红波旁日晒", greenKg: 2.5, roastedKg: 2.13, totalBatchCost: 648.75, cogsPerRoastedKg: 305.29, lossPct: 15, targetMarginPct: 50, bagSizeGrams: 100, suggestedPricePerKg: 610.59, suggestedRetailPerBag: 61.06 }
+    ];
 
     function App() {
       const [imgFailed, setImgFailed] = useState(false);
       const [toastMsg, setToastMsg] = useState('');
 
-      const [sheetUrl, setSheetUrl] = useState(() => localStorage.getItem('__twiggy_gsheet_url__') || '');
-      const [isConfigOpen, setIsConfigOpen] = useState(false);
-      const [isConnected, setIsConnected] = useState(false);
-
+      // Safe state initialization - executed ONCE
       const [beanTypes, setBeanTypes] = useState(() => {
         try {
-          const l = localStorage.getItem('__twiggy_roast_data__');
-          if (l) {
-            const parsed = JSON.parse(l);
+          const raw = localStorage.getItem('__twiggy_roast_data__');
+          if (raw) {
+            const parsed = JSON.parse(raw);
             if (Array.isArray(parsed?.beans) && parsed.beans.length > 0) return parsed.beans;
           }
         } catch (e) {}
-        return DEFAULT_DATA.beans;
+        return INITIAL_BEANS;
       });
 
       const [batches, setBatches] = useState(() => {
         try {
-          const l = localStorage.getItem('__twiggy_roast_data__');
-          if (l) {
-            const parsed = JSON.parse(l);
+          const raw = localStorage.getItem('__twiggy_roast_data__');
+          if (raw) {
+            const parsed = JSON.parse(raw);
             if (Array.isArray(parsed?.batches)) return parsed.batches;
           }
         } catch (e) {}
-        return DEFAULT_DATA.batches;
+        return INITIAL_BATCHES;
       });
+
+      const [sheetUrl, setSheetUrl] = useState(() => localStorage.getItem('__twiggy_gsheet_url__') || '');
+      const [isConfigOpen, setIsConfigOpen] = useState(false);
+      const [isConnected, setIsConnected] = useState(false);
 
       const [isAddingBean, setIsAddingBean] = useState(false);
       const [isManagingBeans, setIsManagingBeans] = useState(false);
@@ -151,74 +119,58 @@
       const [packagingCostPerKg, setPackagingCostPerKg] = useState(130.00);
       const [transportCostPerKg, setTransportCostPerKg] = useState(100.00);
 
-      const triggerToast = (msg) => {
-        setToastMsg(msg);
-        setTimeout(() => setToastMsg(''), 2800);
-      };
-
-      // Local storage cache protection
+      // Debounced safe local storage persist (NEVER causes render loops)
+      const saveTimeoutRef = useRef(null);
       useEffect(() => {
-        try {
-          localStorage.setItem('__twiggy_roast_data__', JSON.stringify({ beans: beanTypes, batches }));
-        } catch (e) {}
+        if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = setTimeout(() => {
+          try {
+            localStorage.setItem('__twiggy_roast_data__', JSON.stringify({ beans: beanTypes, batches }));
+          } catch (e) {}
+        }, 300);
       }, [beanTypes, batches]);
 
-      // Safe Google Sheet synchronization with strict format checking
+      const triggerToast = (msg) => {
+        setToastMsg(msg);
+        setTimeout(() => setToastMsg(''), 2500);
+      };
+
+      // Non-blocking Google Sheet check
       useEffect(() => {
         if (!sheetUrl.trim()) return;
-        let isMounted = true;
+        let active = true;
 
-        const fetchSheetData = async () => {
-          try {
-            const res = await fetch(sheetUrl.trim());
-            if (!res.ok) return;
-
-            // Guard against HTML redirects (e.g., login pages or 404s)
-            const text = await res.text();
-            if (!text.trim().startsWith('{')) {
-              console.warn("Invalid non-JSON response from Google Sheet Web App:", text);
-              return;
-            }
-
-            const remote = JSON.parse(text);
-            if (!isMounted) return;
-
-            if (Array.isArray(remote.beans) && remote.beans.length > 0) {
-              setBeanTypes(remote.beans);
-            }
-            if (Array.isArray(remote.batches)) {
-              setBatches(remote.batches);
-            }
+        fetch(sheetUrl.trim())
+          .then(r => r.ok ? r.json() : null)
+          .then(data => {
+            if (!active || !data) return;
+            if (Array.isArray(data.beans) && data.beans.length > 0) setBeanTypes(data.beans);
+            if (Array.isArray(data.batches)) setBatches(data.batches);
             setIsConnected(true);
-            triggerToast('已同步 Google Sheet 最新資料');
-          } catch (err) {
-            console.warn('Google Sheet fetch error suppressed:', err);
-          }
-        };
+            triggerToast('已同步 Google Sheet 資料');
+          })
+          .catch(() => {
+            if (active) console.log('Sheet connection offline. Using local cache.');
+          });
 
-        fetchSheetData();
-        return () => { isMounted = false; };
+        return () => { active = false; };
       }, [sheetUrl]);
 
-      const pushToGoogleSheet = async (payload) => {
+      const pushToGoogleSheet = (payload) => {
         if (!sheetUrl.trim()) return;
         try {
-          await fetch(sheetUrl.trim(), {
+          fetch(sheetUrl.trim(), {
             method: 'POST',
             mode: 'no-cors',
             headers: { 'Content-Type': 'text/plain;charset=utf-8' },
             body: JSON.stringify(payload)
           });
-        } catch (e) {
-          console.warn('Google Sheet push error suppressed:', e);
-        }
+        } catch (e) {}
       };
 
-      // Safe fallback ensuring activeBean is never undefined
+      // Bulletproof activeBean lookup with perpetual fallback
       const activeBean = useMemo(() => {
-        return beanTypes.find(b => b.id === selectedBeanId) || beanTypes[0] || {
-          id: "fallback", origin: "Twiggy 烘焙", rawGreenCost: 12.5, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50
-        };
+        return beanTypes.find(b => b.id === selectedBeanId) || beanTypes[0] || INITIAL_BEANS[0];
       }, [beanTypes, selectedBeanId]);
 
       const handleBeanSelect = (beanId) => {
@@ -255,15 +207,15 @@
         setIsAddingBean(false);
 
         pushToGoogleSheet({ action: 'SYNC_ALL', beans: updated, batches });
-        triggerToast('新豆品已同步至 Google Sheet');
+        triggerToast('新豆品已同步');
       };
 
       const handleDeleteBeanType = (id, originName) => {
         if (beanTypes.length <= 1) {
-          alert('至少需保留一種咖啡豆品類 (Must keep at least one variety)');
+          alert('至少需保留一種咖啡豆品類');
           return;
         }
-        if (!confirm(`確定要刪除「${originName}」嗎？\n(Remove "${originName}"?)`)) return;
+        if (!confirm(`確定要刪除「${originName}」嗎？`)) return;
 
         const updated = beanTypes.filter(b => b.id !== id);
         setBeanTypes(updated);
@@ -276,7 +228,7 @@
           setTargetMarginPct(next.targetMarginPct ?? 50);
         }
         pushToGoogleSheet({ action: 'SYNC_ALL', beans: updated, batches });
-        triggerToast(`已從 Google Sheet 移除: ${originName}`);
+        triggerToast(`已移除: ${originName}`);
       };
 
       const calcs = useMemo(() => {
@@ -342,7 +294,7 @@
         setBatches(updated);
 
         pushToGoogleSheet({ action: 'ADD_BATCH', data: newBatch });
-        triggerToast('烘豆批次已寫入 Google Sheet');
+        triggerToast('批次已記錄');
       };
 
       const handleDeleteBatch = (id) => {
@@ -354,7 +306,7 @@
       const handleSaveSheetUrl = () => {
         localStorage.setItem('__twiggy_gsheet_url__', sheetUrl.trim());
         setIsConfigOpen(false);
-        triggerToast('Google Sheet 網址已保存');
+        triggerToast('網址已儲存');
       };
 
       const handleExportExcel = () => {
@@ -382,7 +334,7 @@
       return (
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 md:py-10">
           
-          {/* Header Navigation */}
+          {/* Header */}
           <nav className="flex flex-col md:flex-row md:items-center justify-between pb-8 mb-8 border-b border-roast-200 gap-6">
             <div className="flex flex-col sm:flex-row sm:items-center gap-6">
               <div className="flex items-center">
@@ -422,10 +374,9 @@
                     ? 'bg-emerald-50 text-emerald-800 border-emerald-300 shadow-sm' 
                     : 'bg-white text-stone-700 border-roast-200 hover:bg-roast-100 shadow-sm'
                 }`}
-                title="綁定 Google Sheet 即時試算表"
               >
                 <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500' : 'bg-amber-400 animate-pulse'}`}></span>
-                <span>{isConnected ? 'Google Sheet 已連線' : '連線 Google Sheet (Connect)'}</span>
+                <span>{isConnected ? 'Google Sheet 已連線' : '連線 Google Sheet'}</span>
               </button>
 
               <button
@@ -436,12 +387,12 @@
                 <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
-                <span>匯出 Excel (Export)</span>
+                <span>匯出 Excel</span>
               </button>
             </div>
           </nav>
 
-          {/* Google Sheet Config Drawer */}
+          {/* Config Modal */}
           {isConfigOpen && (
             <div className="mb-8 p-5 rounded-2xl bg-white border border-emerald-200 shadow-md">
               <div className="flex justify-between items-center mb-2">
@@ -449,7 +400,7 @@
                 <span className="text-[11px] text-stone-400">跨裝置自動同步</span>
               </div>
               <p className="text-xs text-stone-500 mb-4">
-                請在下方貼入您在 Google Apps Script 部署取得的 <strong>網頁應用程式網址 (Web App URL)</strong>：
+                請貼入 Google Apps Script 部署取得的 <strong>網頁應用程式網址 (Web App URL)</strong>：
               </p>
               <div className="flex flex-col sm:flex-row gap-2">
                 <input
@@ -470,7 +421,7 @@
             </div>
           )}
 
-          {/* Metric Cards */}
+          {/* Top KPI Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
             <div className="bg-white p-5 rounded-2xl border border-roast-200 shadow-sm relative overflow-hidden">
               <span className="text-[11px] font-bold uppercase tracking-wider text-stone-400 block">
@@ -478,7 +429,7 @@
               </span>
               <div className="mt-2 flex items-baseline gap-1.5">
                 <span className="text-3xl font-extrabold text-roast-950 font-mono">{calcs.roastedKg.toFixed(2)}</span>
-                <span className="text-sm font-semibold text-stone-500">kg (公斤)</span>
+                <span className="text-sm font-semibold text-stone-500">kg</span>
               </div>
               <p className="mt-1 text-xs text-stone-500 font-medium">源自 {batchGreenKg} kg 生豆 (失重率 –{moistureLossPct}%)</p>
             </div>
@@ -522,15 +473,15 @@
             </div>
           </div>
 
-          {/* Form Grid */}
+          {/* Form & Controls */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 mb-12">
             <div className="lg:col-span-8 space-y-6">
               
               <div className="bg-white p-6 rounded-2xl border border-roast-200 shadow-sm">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 mb-5 border-b border-roast-100 gap-3">
                   <div>
-                    <h2 className="text-base font-bold text-roast-950">1. 選擇豆品與批次重量 (Select Origin & Batch Size)</h2>
-                    <p className="text-xs text-stone-500">從庫存選擇咖啡豆品種，並輸入本次烘焙生豆投料量。</p>
+                    <h2 className="text-base font-bold text-roast-950">1. 選擇豆品與批次重量</h2>
+                    <p className="text-xs text-stone-500">從庫存選擇品種，並輸入本次烘焙生豆投料量。</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <button
@@ -540,37 +491,37 @@
                         isManagingBeans ? 'bg-amber-800 text-white' : 'bg-roast-100 text-roast-800 hover:bg-roast-200'
                       }`}
                     >
-                      <span>{isManagingBeans ? '完成管理 (Done)' : '管理/刪除品類 (Manage Beans)'}</span>
+                      <span>{isManagingBeans ? '完成' : '管理豆單'}</span>
                     </button>
                     <button
                       type="button"
                       onClick={() => { setIsAddingBean(!isAddingBean); setIsManagingBeans(false); }}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-copper-500 text-white hover:bg-copper-600 transition"
                     >
-                      <span className="text-sm font-bold">{isAddingBean ? '✕' : '+'}</span>
-                      <span>{isAddingBean ? '關閉 (Close)' : '新增豆品品類 (+ Add Bean)'}</span>
+                      <span>{isAddingBean ? '✕' : '+ 新增豆品'}</span>
                     </button>
                   </div>
                 </div>
 
+                {/* Manage Beans */}
                 {isManagingBeans && (
                   <div className="mb-6 p-4 rounded-xl bg-amber-50/70 border border-amber-200">
                     <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-amber-950">管理現有品類 (點擊紅色 ✕ 刪除品項)</h3>
-                      <span className="text-[11px] text-stone-500">共 {beanTypes.length} 種品類</span>
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-amber-950">現有品類清單</h3>
+                      <span className="text-[11px] text-stone-500">共 {beanTypes.length} 種</span>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       {beanTypes.map((bean) => (
-                        <div key={bean.id} className="flex items-center justify-between p-2.5 bg-white rounded-lg border border-roast-200 shadow-xs">
+                        <div key={bean.id} className="flex items-center justify-between p-2.5 bg-white rounded-lg border border-roast-200">
                           <div className="overflow-hidden pr-2">
                             <span className="font-bold text-xs text-roast-900 block truncate">{bean.origin}</span>
-                            <span className="text-[10px] text-stone-400">底價: ${bean.rawGreenCost} / 運費: ${bean.greenDeliveryCost} / 毛利: {bean.targetMarginPct}%</span>
+                            <span className="text-[10px] text-stone-400">底價: ${bean.rawGreenCost} / 運費: ${bean.greenDeliveryCost}</span>
                           </div>
                           <button
                             type="button"
                             onClick={() => handleDeleteBeanType(bean.id, bean.origin)}
-                            className="text-stone-400 hover:text-rose-600 p-1.5 rounded hover:bg-rose-50 transition flex-shrink-0"
-                            title="刪除此豆品 (Delete Bean)"
+                            className="text-stone-400 hover:text-rose-600 p-1.5 rounded hover:bg-rose-50 transition"
+                            title="刪除"
                           >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -582,50 +533,51 @@
                   </div>
                 )}
 
+                {/* Add Bean */}
                 {isAddingBean && (
                   <form onSubmit={handleCreateBeanType} className="mb-6 p-4 rounded-xl bg-roast-50 border border-roast-200">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-roast-700 mb-3">新增咖啡品項庫存 (Add Coffee Lot)</h3>
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-roast-700 mb-3">新增咖啡品項庫存</h3>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <div className="sm:col-span-3">
-                        <label className="text-[11px] font-semibold text-stone-600">品名 / 產區 / 莊園 (Variety / Origin / Farm)</label>
+                        <label className="text-[11px] font-semibold text-stone-600">品名 / 產區 / 莊園</label>
                         <input
                           type="text"
                           required
-                          placeholder="例如: 薩爾瓦多 聖華金莊園 紅波旁 日曬"
+                          placeholder="例如: 薩爾瓦多 聖華金莊園"
                           value={newOrigin}
                           onChange={(e) => setNewOrigin(e.target.value)}
-                          className="w-full mt-1 px-3 py-2 text-xs font-medium rounded-lg border border-roast-200 bg-white focus:outline-none focus:ring-2 focus:ring-copper-500"
+                          className="w-full mt-1 px-3 py-2 text-xs font-medium rounded-lg border border-roast-200 bg-white focus:ring-2 focus:ring-copper-500 outline-none"
                         />
                       </div>
                       <div>
-                        <label className="text-[11px] font-semibold text-stone-600">生豆底價 $/kg (FOB Cost)</label>
+                        <label className="text-[11px] font-semibold text-stone-600">生豆底價 $/kg</label>
                         <input
                           type="number"
                           step="0.10"
                           required
-                          placeholder="例如: 120.00"
+                          placeholder="120.00"
                           value={newRawCost}
                           onChange={(e) => setNewRawCost(e.target.value)}
-                          className="w-full mt-1 px-3 py-2 text-xs font-medium rounded-lg border border-roast-200 bg-white focus:outline-none focus:ring-2 focus:ring-copper-500"
+                          className="w-full mt-1 px-3 py-2 text-xs font-medium rounded-lg border border-roast-200 bg-white focus:ring-2 focus:ring-copper-500 outline-none"
                         />
                       </div>
                       <div>
-                        <label className="text-[11px] font-semibold text-stone-600">進貨運費 $/kg (Inbound Freight)</label>
+                        <label className="text-[11px] font-semibold text-stone-600">進貨運費 $/kg</label>
                         <input
                           type="number"
                           step="0.05"
                           value={newInboundDelivery}
                           onChange={(e) => setNewInboundDelivery(e.target.value)}
-                          className="w-full mt-1 px-3 py-2 text-xs font-medium rounded-lg border border-roast-200 bg-white focus:outline-none focus:ring-2 focus:ring-copper-500"
+                          className="w-full mt-1 px-3 py-2 text-xs font-medium rounded-lg border border-roast-200 bg-white focus:ring-2 focus:ring-copper-500 outline-none"
                         />
                       </div>
                       <div>
-                        <label className="text-[11px] font-semibold text-stone-600">目標毛利率 % (Target Margin)</label>
+                        <label className="text-[11px] font-semibold text-stone-600">目標毛利率 %</label>
                         <input
                           type="number"
                           value={newMargin}
                           onChange={(e) => setNewMargin(e.target.value)}
-                          className="w-full mt-1 px-3 py-2 text-xs font-medium rounded-lg border border-roast-200 bg-white focus:outline-none focus:ring-2 focus:ring-copper-500"
+                          className="w-full mt-1 px-3 py-2 text-xs font-medium rounded-lg border border-roast-200 bg-white focus:ring-2 focus:ring-copper-500 outline-none"
                         />
                       </div>
                     </div>
@@ -634,7 +586,7 @@
                         type="submit"
                         className="px-4 py-2 bg-roast-900 text-white rounded-lg text-xs font-bold hover:bg-black transition"
                       >
-                        儲存至豆單並同步 (Save to Google Sheet)
+                        儲存至豆單
                       </button>
                     </div>
                   </form>
@@ -642,11 +594,11 @@
 
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
                   <div className="sm:col-span-6">
-                    <label className="block text-xs font-bold text-stone-700 mb-1.5">咖啡豆品名 (Coffee Lot / Origin)</label>
+                    <label className="block text-xs font-bold text-stone-700 mb-1.5">咖啡豆品名</label>
                     <select
                       value={selectedBeanId}
                       onChange={(e) => handleBeanSelect(e.target.value)}
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-roast-200 bg-roast-50 font-semibold text-xs text-roast-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-copper-500"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-roast-200 bg-roast-50 font-semibold text-xs text-roast-900 focus:bg-white focus:ring-2 focus:ring-copper-500 outline-none"
                     >
                       {beanTypes.map(bean => (
                         <option key={bean.id} value={bean.id}>
@@ -657,7 +609,7 @@
                   </div>
 
                   <div className="sm:col-span-3">
-                    <label className="block text-xs font-bold text-stone-700 mb-1.5">生豆投料量 (Green Weight)</label>
+                    <label className="block text-xs font-bold text-stone-700 mb-1.5">生豆投料量</label>
                     <div className="relative">
                       <input
                         type="number"
@@ -665,14 +617,14 @@
                         min="0.1"
                         value={batchGreenKg}
                         onChange={(e) => setBatchGreenKg(parseFloat(e.target.value) || 0)}
-                        className="w-full pl-3.5 pr-8 py-2.5 rounded-xl border border-roast-200 font-mono font-bold text-xs text-roast-900 focus:outline-none focus:ring-2 focus:ring-copper-500"
+                        className="w-full pl-3.5 pr-8 py-2.5 rounded-xl border border-roast-200 font-mono font-bold text-xs text-roast-900 focus:ring-2 focus:ring-copper-500 outline-none"
                       />
                       <span className="absolute right-3 top-2.5 text-xs text-stone-400 font-medium">kg</span>
                     </div>
                   </div>
 
                   <div className="sm:col-span-3">
-                    <label className="block text-xs font-bold text-stone-700 mb-1.5">失重率 (Moisture Loss)</label>
+                    <label className="block text-xs font-bold text-stone-700 mb-1.5">失重率</label>
                     <div className="relative">
                       <input
                         type="number"
@@ -681,16 +633,16 @@
                         max="28"
                         value={moistureLossPct}
                         onChange={(e) => setMoistureLossPct(parseFloat(e.target.value) || 0)}
-                        className="w-full pl-3.5 pr-8 py-2.5 rounded-xl border border-roast-200 font-mono font-bold text-xs text-roast-900 focus:outline-none focus:ring-2 focus:ring-copper-500"
+                        className="w-full pl-3.5 pr-8 py-2.5 rounded-xl border border-roast-200 font-mono font-bold text-xs text-roast-900 focus:ring-2 focus:ring-copper-500 outline-none"
                       />
                       <span className="absolute right-3 top-2.5 text-xs text-stone-400 font-bold">%</span>
                     </div>
                   </div>
                 </div>
 
-                {/* Packaging Size Quick Buttons */}
+                {/* Packaging Size Selector */}
                 <div className="mt-5 pt-4 border-t border-roast-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <span className="text-xs font-bold text-stone-700">零售包裝規格 (Packaging Format):</span>
+                  <span className="text-xs font-bold text-stone-700">零售包裝規格:</span>
                   <div className="flex items-center gap-1.5 flex-wrap">
                     {[100, 200, 250, 340, 500, 1000].map(grams => (
                       <button
@@ -725,17 +677,17 @@
               <div className="bg-white p-6 rounded-2xl border border-roast-200 shadow-sm space-y-5">
                 <div className="pb-3 border-b border-roast-100 flex justify-between items-center">
                   <div>
-                    <h2 className="text-base font-bold text-roast-950">2. 各階段成本參數 (Cost Factors)</h2>
-                    <p className="text-xs text-stone-500">標準化每公斤生豆/熟豆營運成本細項。</p>
+                    <h2 className="text-base font-bold text-roast-950">2. 各階段成本參數</h2>
+                    <p className="text-xs text-stone-500">標準化每公斤營運成本細項。</p>
                   </div>
                   <span className="text-xs font-mono font-medium px-2.5 py-1 rounded-md bg-roast-100 text-roast-700">
-                    生豆到廠價 (Landed): ${calcs.landedGreenPerKg.toFixed(2)}/kg
+                    到廠價: ${calcs.landedGreenPerKg.toFixed(2)}/kg
                   </span>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
                   <div className="p-3 rounded-xl bg-roast-50/70 border border-roast-200">
-                    <label className="text-[11px] font-semibold text-stone-600 block">生豆進價 $/kg (Green FOB)</label>
+                    <label className="text-[11px] font-semibold text-stone-600 block">生豆進價 $/kg</label>
                     <input
                       type="number"
                       step="0.10"
@@ -746,7 +698,7 @@
                   </div>
 
                   <div className="p-3 rounded-xl bg-roast-50/70 border border-roast-200">
-                    <label className="text-[11px] font-semibold text-stone-600 block">生豆運費 $/kg (Inbound Freight)</label>
+                    <label className="text-[11px] font-semibold text-stone-600 block">生豆運費 $/kg</label>
                     <input
                       type="number"
                       step="0.05"
@@ -757,7 +709,7 @@
                   </div>
 
                   <div className="p-3 rounded-xl bg-roast-50/70 border border-roast-200">
-                    <label className="text-[11px] font-semibold text-stone-600 block">能源與瓦斯 $/kg (Energy & Gas)</label>
+                    <label className="text-[11px] font-semibold text-stone-600 block">能源與瓦斯 $/kg</label>
                     <input
                       type="number"
                       step="0.05"
@@ -768,7 +720,7 @@
                   </div>
 
                   <div className="p-3 rounded-xl bg-roast-50/70 border border-roast-200">
-                    <label className="text-[11px] font-semibold text-stone-600 block">烘焙人工 $/kg (Roast Labor)</label>
+                    <label className="text-[11px] font-semibold text-stone-600 block">烘焙人工 $/kg</label>
                     <input
                       type="number"
                       step="0.05"
@@ -779,7 +731,7 @@
                   </div>
 
                   <div className="p-3 rounded-xl bg-roast-50/70 border border-roast-200">
-                    <label className="text-[11px] font-semibold text-stone-600 block">場地設備折舊 $/kg (Overhead)</label>
+                    <label className="text-[11px] font-semibold text-stone-600 block">設備折舊 $/kg</label>
                     <input
                       type="number"
                       step="0.05"
@@ -790,7 +742,7 @@
                   </div>
 
                   <div className="p-3 rounded-xl bg-roast-50/70 border border-roast-200">
-                    <label className="text-[11px] font-semibold text-stone-600 block">包裝耗材 $/kg (Packaging)</label>
+                    <label className="text-[11px] font-semibold text-stone-600 block">包裝耗材 $/kg</label>
                     <input
                       type="number"
                       step="0.10"
@@ -801,7 +753,7 @@
                   </div>
 
                   <div className="p-3 rounded-xl bg-roast-50/70 border border-roast-200">
-                    <label className="text-[11px] font-semibold text-stone-600 block">出貨運費 $/kg (Outbound Freight)</label>
+                    <label className="text-[11px] font-semibold text-stone-600 block">出貨運費 $/kg</label>
                     <input
                       type="number"
                       step="0.10"
@@ -812,7 +764,7 @@
                   </div>
 
                   <div className="p-3 rounded-xl bg-amber-50/80 border border-amber-200">
-                    <label className="text-[11px] font-semibold text-amber-900 block">目標毛利率 % (Target Margin)</label>
+                    <label className="text-[11px] font-semibold text-amber-900 block">目標毛利率 %</label>
                     <input
                       type="number"
                       step="1"
@@ -834,7 +786,7 @@
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 4v16m8-8H4"/>
                     </svg>
-                    <span>確認並寫入 Google Sheet (Commit & Sync)</span>
+                    <span>確認並記錄批次</span>
                   </button>
                 </div>
               </div>
@@ -844,41 +796,41 @@
             <div className="lg:col-span-4 space-y-6">
               <div className="bg-roast-900 text-white p-6 rounded-2xl shadow-md space-y-5">
                 <div className="border-b border-roast-800 pb-3 flex justify-between items-center">
-                  <h3 className="font-bold text-sm tracking-wide uppercase text-roast-200">成本結構分析 (Economics Breakdown)</h3>
+                  <h3 className="font-bold text-sm tracking-wide uppercase text-roast-200">成本結構分析</h3>
                   <span className="text-[11px] font-mono text-copper-500 font-bold">{packageSizeGrams}g 規格</span>
                 </div>
 
                 <div className="space-y-3 text-xs">
                   <div className="flex justify-between items-center text-stone-300">
-                    <span>生豆到廠總值 (Landed Green Input)</span>
+                    <span>生豆到廠總值</span>
                     <span className="font-mono font-medium">${calcs.greenCostTotal.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between items-center text-stone-300">
-                    <span>烘焙營運支出 (Roasting Operations)</span>
+                    <span>烘焙營運支出</span>
                     <span className="font-mono font-medium">${calcs.opsCostTotal.toFixed(2)}</span>
                   </div>
                   <div className="flex justify-between items-center text-stone-300">
-                    <span>包裝與物流 (Packaging & Freight)</span>
+                    <span>包裝與物流</span>
                     <span className="font-mono font-medium">${(calcs.roastedKg * (packagingCostPerKg + transportCostPerKg)).toFixed(2)}</span>
                   </div>
                   
                   <div className="pt-2 border-t border-roast-800 flex justify-between items-center font-bold text-white text-sm">
-                    <span>真實每公斤熟豆成本 (Cost / Roasted kg)</span>
+                    <span>真實每公斤熟豆成本</span>
                     <span className="font-mono text-copper-500">${calcs.cogsPerRoastedKg.toFixed(2)}</span>
                   </div>
                 </div>
 
                 <div className="p-4 rounded-xl bg-roast-800/80 border border-roast-700/60 space-y-2">
                   <div className="flex justify-between text-xs">
-                    <span className="text-stone-400">目標毛利率 (Target Margin)</span>
+                    <span className="text-stone-400">目標毛利率</span>
                     <span className="font-bold text-emerald-400 font-mono">{targetMarginPct}%</span>
                   </div>
                   <div className="flex justify-between text-xs">
-                    <span className="text-stone-400">單包利潤 (Profit / Bag)</span>
+                    <span className="text-stone-400">單包利潤</span>
                     <span className="font-bold text-white font-mono">+${(calcs.retailPricePerBag - calcs.cogsPerBag).toFixed(2)}</span>
                   </div>
                   <div className="pt-2 border-t border-roast-700/60 flex justify-between text-sm font-extrabold text-amber-400">
-                    <span>建議零售價 (Suggested Retail)</span>
+                    <span>建議零售價</span>
                     <span className="font-mono">${calcs.retailPricePerBag.toFixed(2)}</span>
                   </div>
                 </div>
@@ -894,8 +846,8 @@
           <div className="bg-white rounded-2xl border border-roast-200 shadow-sm overflow-hidden">
             <div className="p-5 border-b border-roast-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
-                <h3 className="font-bold text-roast-950 text-base">Twiggy 烘豆批次日誌 (Roasting Journal)</h3>
-                <p className="text-xs text-stone-500">歷史烘焙批次記錄，自動核算失重率與目標利潤售價。</p>
+                <h3 className="font-bold text-roast-950 text-base">Twiggy 烘豆批次日誌</h3>
+                <p className="text-xs text-stone-500">歷史烘焙批次記錄。</p>
               </div>
               <span className="text-xs font-semibold px-3 py-1 bg-roast-100 text-roast-800 rounded-lg w-fit">
                 已記錄 {batches.length} 批次
@@ -906,23 +858,23 @@
               <table className="w-full text-left text-xs">
                 <thead className="bg-roast-50/70 border-b border-roast-200 text-stone-500 uppercase font-bold tracking-wider text-[10px]">
                   <tr>
-                    <th className="py-3.5 px-5">日期 (Date)</th>
-                    <th className="py-3.5 px-4">品名產區 (Lot & Origin)</th>
-                    <th className="py-3.5 px-3 text-right">生豆重 (Green kg)</th>
-                    <th className="py-3.5 px-3 text-right">熟豆產出 (Roasted kg)</th>
-                    <th className="py-3.5 px-3 text-right">批次總成本 (Batch COGS)</th>
-                    <th className="py-3.5 px-3 text-right">熟豆成本/kg (Cost/kg)</th>
-                    <th className="py-3.5 px-3 text-right">包裝規格 (Pack Size)</th>
-                    <th className="py-3.5 px-3 text-right">毛利率 (Margin)</th>
-                    <th className="py-3.5 px-4 text-right">建議零售價 (Retail/Bag)</th>
-                    <th className="py-3.5 px-4 text-center">操作 (Action)</th>
+                    <th className="py-3.5 px-5">日期</th>
+                    <th className="py-3.5 px-4">品名產區</th>
+                    <th className="py-3.5 px-3 text-right">生豆重 (kg)</th>
+                    <th className="py-3.5 px-3 text-right">熟豆產出 (kg)</th>
+                    <th className="py-3.5 px-3 text-right">批次總成本</th>
+                    <th className="py-3.5 px-3 text-right">成本/kg</th>
+                    <th className="py-3.5 px-3 text-right">規格</th>
+                    <th className="py-3.5 px-3 text-right">毛利率</th>
+                    <th className="py-3.5 px-4 text-right">建議零售價</th>
+                    <th className="py-3.5 px-4 text-center">操作</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-roast-100">
                   {batches.length === 0 ? (
                     <tr>
                       <td colSpan="10" className="py-12 text-center text-stone-400">
-                        暫無烘焙批次記錄。請於上方設置並點擊「確認並寫入 Google Sheet」。
+                        暫無烘焙記錄。
                       </td>
                     </tr>
                   ) : (
@@ -941,7 +893,7 @@
                           <button
                             onClick={() => handleDeleteBatch(batch.id)}
                             className="text-stone-400 hover:text-rose-600 p-1 transition"
-                            title="刪除此記錄 (Delete Batch)"
+                            title="刪除"
                           >
                             ✕
                           </button>
@@ -954,7 +906,7 @@
             </div>
           </div>
 
-          {/* Toast Notification */}
+          {/* Toast */}
           {toastMsg && (
             <div className="fixed bottom-6 right-6 bg-roast-950 text-white text-xs font-semibold px-4 py-3 rounded-xl shadow-xl flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
@@ -965,11 +917,7 @@
       );
     }
 
-    ReactDOM.createRoot(document.getElementById('root')).render(
-      <ErrorBoundary>
-        <App />
-      </ErrorBoundary>
-    );
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
   </script>
 </body>
 </html>
