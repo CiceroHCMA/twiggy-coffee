@@ -41,7 +41,40 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useMemo, useEffect } = React;
+    const { useState, useMemo, useEffect, Component } = React;
+
+    // Boundary to catch and display any unexpected React crash instead of blank screen
+    class ErrorBoundary extends Component {
+      constructor(props) {
+        super(props);
+        this.state = { hasError: false, error: null };
+      }
+      static getDerivedStateFromError(error) {
+        return { hasError: true, error };
+      }
+      componentDidCatch(error, errorInfo) {
+        console.error("React Crash Intercepted:", error, errorInfo);
+      }
+      render() {
+        if (this.state.hasError) {
+          return (
+            <div className="max-w-xl mx-auto my-12 p-6 bg-white rounded-2xl border border-rose-200 shadow-lg text-center space-y-4">
+              <h2 className="text-lg font-bold text-rose-600">系統載入異常 (Runtime Error)</h2>
+              <p className="text-xs text-stone-600 font-mono bg-stone-100 p-3 rounded-lg break-all text-left">
+                {this.state.error?.toString()}
+              </p>
+              <button 
+                onClick={() => { localStorage.clear(); window.location.reload(); }}
+                className="px-4 py-2 bg-roast-950 text-white rounded-xl text-xs font-bold hover:bg-black transition"
+              >
+                重設快取並重新載入 (Reset Cache & Reload)
+              </button>
+            </div>
+          );
+        }
+        return this.props.children;
+      }
+    }
 
     const DEFAULT_DATA = {
       beans: [
@@ -68,16 +101,17 @@
       const [imgFailed, setImgFailed] = useState(false);
       const [toastMsg, setToastMsg] = useState('');
 
-      // Google Apps Script Web App URL
-      const [sheetUrl, setSheetUrl] = useState(localStorage.getItem('__twiggy_gsheet_url__') || '');
+      const [sheetUrl, setSheetUrl] = useState(() => localStorage.getItem('__twiggy_gsheet_url__') || '');
       const [isConfigOpen, setIsConfigOpen] = useState(false);
-      const [isSyncing, setIsSyncing] = useState(false);
       const [isConnected, setIsConnected] = useState(false);
 
       const [beanTypes, setBeanTypes] = useState(() => {
         try {
           const l = localStorage.getItem('__twiggy_roast_data__');
-          if (l) return JSON.parse(l).beans || DEFAULT_DATA.beans;
+          if (l) {
+            const parsed = JSON.parse(l);
+            if (Array.isArray(parsed?.beans) && parsed.beans.length > 0) return parsed.beans;
+          }
         } catch (e) {}
         return DEFAULT_DATA.beans;
       });
@@ -85,7 +119,10 @@
       const [batches, setBatches] = useState(() => {
         try {
           const l = localStorage.getItem('__twiggy_roast_data__');
-          if (l) return JSON.parse(l).batches || DEFAULT_DATA.batches;
+          if (l) {
+            const parsed = JSON.parse(l);
+            if (Array.isArray(parsed?.batches)) return parsed.batches;
+          }
         } catch (e) {}
         return DEFAULT_DATA.batches;
       });
@@ -98,13 +135,13 @@
       const [newLoss, setNewLoss] = useState(15.0);
       const [newMargin, setNewMargin] = useState(50);
 
-      const [selectedBeanId, setSelectedBeanId] = useState(DEFAULT_DATA.beans[0].id);
+      const [selectedBeanId, setSelectedBeanId] = useState(() => beanTypes[0]?.id || "1");
       const [batchGreenKg, setBatchGreenKg] = useState(2.5);
       const [moistureLossPct, setMoistureLossPct] = useState(15.0);
       const [targetMarginPct, setTargetMarginPct] = useState(50);
       const [packageSizeGrams, setPackageSizeGrams] = useState(100);
 
-      const [rawGreenPricePerKg, setRawGreenPricePerKg] = useState(DEFAULT_DATA.beans[0].rawGreenCost);
+      const [rawGreenPricePerKg, setRawGreenPricePerKg] = useState(() => beanTypes[0]?.rawGreenCost || 12.50);
       const [greenDeliveryPerKg, setGreenDeliveryPerKg] = useState(12.00);
 
       const [energyCostPerKg, setEnergyCostPerKg] = useState(2.00);
@@ -119,41 +156,53 @@
         setTimeout(() => setToastMsg(''), 2800);
       };
 
-      // Auto-cache locally
+      // Local storage cache protection
       useEffect(() => {
         try {
           localStorage.setItem('__twiggy_roast_data__', JSON.stringify({ beans: beanTypes, batches }));
         } catch (e) {}
       }, [beanTypes, batches]);
 
-      // Load data from Google Sheet on startup if URL is configured
+      // Safe Google Sheet synchronization with strict format checking
       useEffect(() => {
         if (!sheetUrl.trim()) return;
+        let isMounted = true;
+
         const fetchSheetData = async () => {
-          setIsSyncing(true);
           try {
             const res = await fetch(sheetUrl.trim());
-            if (res.ok) {
-              const remote = await res.json();
-              if (remote.beans && remote.beans.length > 0) setBeanTypes(remote.beans);
-              if (remote.batches && remote.batches.length > 0) setBatches(remote.batches);
-              setIsConnected(true);
-              triggerToast('已從 Google Sheet 同步最新資料 (Synced from Google Sheets)');
+            if (!res.ok) return;
+
+            // Guard against HTML redirects (e.g., login pages or 404s)
+            const text = await res.text();
+            if (!text.trim().startsWith('{')) {
+              console.warn("Invalid non-JSON response from Google Sheet Web App:", text);
+              return;
             }
+
+            const remote = JSON.parse(text);
+            if (!isMounted) return;
+
+            if (Array.isArray(remote.beans) && remote.beans.length > 0) {
+              setBeanTypes(remote.beans);
+            }
+            if (Array.isArray(remote.batches)) {
+              setBatches(remote.batches);
+            }
+            setIsConnected(true);
+            triggerToast('已同步 Google Sheet 最新資料');
           } catch (err) {
-            console.warn('Google Sheet connection error:', err);
-          } finally {
-            setIsSyncing(false);
+            console.warn('Google Sheet fetch error suppressed:', err);
           }
         };
+
         fetchSheetData();
+        return () => { isMounted = false; };
       }, [sheetUrl]);
 
-      // Sync changes to Google Sheet
       const pushToGoogleSheet = async (payload) => {
         if (!sheetUrl.trim()) return;
         try {
-          // Send as text/plain to prevent CORS preflight blocks in Apps Script
           await fetch(sheetUrl.trim(), {
             method: 'POST',
             mode: 'no-cors',
@@ -161,22 +210,25 @@
             body: JSON.stringify(payload)
           });
         } catch (e) {
-          console.error('Failed to update Google Sheet:', e);
+          console.warn('Google Sheet push error suppressed:', e);
         }
       };
 
+      // Safe fallback ensuring activeBean is never undefined
       const activeBean = useMemo(() => {
-        return beanTypes.find(b => b.id === selectedBeanId) || beanTypes[0] || {};
+        return beanTypes.find(b => b.id === selectedBeanId) || beanTypes[0] || {
+          id: "fallback", origin: "Twiggy 烘焙", rawGreenCost: 12.5, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50
+        };
       }, [beanTypes, selectedBeanId]);
 
       const handleBeanSelect = (beanId) => {
         setSelectedBeanId(beanId);
         const b = beanTypes.find(item => item.id === beanId);
         if (b) {
-          setRawGreenPricePerKg(b.rawGreenCost);
-          setGreenDeliveryPerKg(b.greenDeliveryCost || 12.00);
-          setMoistureLossPct(b.defaultLossPct || 15.0);
-          setTargetMarginPct(b.targetMarginPct || 50);
+          setRawGreenPricePerKg(b.rawGreenCost ?? 12.5);
+          setGreenDeliveryPerKg(b.greenDeliveryCost ?? 12.00);
+          setMoistureLossPct(b.defaultLossPct ?? 15.0);
+          setTargetMarginPct(b.targetMarginPct ?? 50);
         }
       };
 
@@ -202,7 +254,6 @@
         setNewRawCost('');
         setIsAddingBean(false);
 
-        // Sync catalog to Google Sheet
         pushToGoogleSheet({ action: 'SYNC_ALL', beans: updated, batches });
         triggerToast('新豆品已同步至 Google Sheet');
       };
@@ -219,10 +270,10 @@
         if (selectedBeanId === id) {
           const next = updated[0];
           setSelectedBeanId(next.id);
-          setRawGreenPricePerKg(next.rawGreenCost);
-          setGreenDeliveryPerKg(next.greenDeliveryCost || 12.00);
-          setMoistureLossPct(next.defaultLossPct || 15.0);
-          setTargetMarginPct(next.targetMarginPct || 50);
+          setRawGreenPricePerKg(next.rawGreenCost ?? 12.5);
+          setGreenDeliveryPerKg(next.greenDeliveryCost ?? 12.00);
+          setMoistureLossPct(next.defaultLossPct ?? 15.0);
+          setTargetMarginPct(next.targetMarginPct ?? 50);
         }
         pushToGoogleSheet({ action: 'SYNC_ALL', beans: updated, batches });
         triggerToast(`已從 Google Sheet 移除: ${originName}`);
@@ -290,9 +341,8 @@
         const updated = [newBatch, ...batches];
         setBatches(updated);
 
-        // Instantly stream to Google Sheet
         pushToGoogleSheet({ action: 'ADD_BATCH', data: newBatch });
-        triggerToast('烘豆批次已寫入 Google Sheet (Logged to Google Sheet)');
+        triggerToast('烘豆批次已寫入 Google Sheet');
       };
 
       const handleDeleteBatch = (id) => {
@@ -364,7 +414,6 @@
             </div>
 
             <div className="flex items-center gap-2.5 self-start md:self-center">
-              {/* Google Sheets Config Button */}
               <button
                 type="button"
                 onClick={() => setIsConfigOpen(!isConfigOpen)}
@@ -397,7 +446,7 @@
             <div className="mb-8 p-5 rounded-2xl bg-white border border-emerald-200 shadow-md">
               <div className="flex justify-between items-center mb-2">
                 <h3 className="text-sm font-bold text-roast-950">Google Sheet 雲端串接設定</h3>
-                <span className="text-[11px] text-stone-400">跨裝置自動同步，不再需要儲存或下載 HTML</span>
+                <span className="text-[11px] text-stone-400">跨裝置自動同步</span>
               </div>
               <p className="text-xs text-stone-500 mb-4">
                 請在下方貼入您在 Google Apps Script 部署取得的 <strong>網頁應用程式網址 (Web App URL)</strong>：
@@ -473,11 +522,10 @@
             </div>
           </div>
 
-          {/* Form & Sidebar Grid */}
+          {/* Form Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 mb-12">
             <div className="lg:col-span-8 space-y-6">
               
-              {/* Variety & Batch Setup */}
               <div className="bg-white p-6 rounded-2xl border border-roast-200 shadow-sm">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 mb-5 border-b border-roast-100 gap-3">
                   <div>
@@ -505,7 +553,6 @@
                   </div>
                 </div>
 
-                {/* Manage / Delete Existing Beans */}
                 {isManagingBeans && (
                   <div className="mb-6 p-4 rounded-xl bg-amber-50/70 border border-amber-200">
                     <div className="flex items-center justify-between mb-3">
@@ -535,7 +582,6 @@
                   </div>
                 )}
 
-                {/* Add New Bean Form */}
                 {isAddingBean && (
                   <form onSubmit={handleCreateBeanType} className="mb-6 p-4 rounded-xl bg-roast-50 border border-roast-200">
                     <h3 className="text-xs font-bold uppercase tracking-wider text-roast-700 mb-3">新增咖啡品項庫存 (Add Coffee Lot)</h3>
@@ -919,7 +965,11 @@
       );
     }
 
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    ReactDOM.createRoot(document.getElementById('root')).render(
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
+    );
   </script>
 </body>
 </html>
