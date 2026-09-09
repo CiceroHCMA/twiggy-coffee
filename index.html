@@ -9,7 +9,6 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;700&family=Noto+Serif+TC:wght@500;700&display=swap" rel="stylesheet">
 
-  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -32,17 +31,17 @@
     }
   </script>
 
-  <!-- React 18, Babel, SheetJS -->
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Stable React 18 & Babel Standalone CDNs -->
+  <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"></script>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
 </head>
 <body class="bg-roast-50 text-roast-900 font-sans antialiased min-h-screen">
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useMemo, useEffect, useRef } = React;
+    const { useState, useMemo, useEffect } = React;
 
     const INITIAL_BEANS = [
       { id: "1", origin: "Twiggy Signature Blend", rawGreenCost: 12.5, greenDeliveryCost: 12, defaultLossPct: 15, targetMarginPct: 50 },
@@ -68,7 +67,6 @@
       const [imgFailed, setImgFailed] = useState(false);
       const [toastMsg, setToastMsg] = useState('');
 
-      // Safe state initialization - executed ONCE
       const [beanTypes, setBeanTypes] = useState(() => {
         try {
           const raw = localStorage.getItem('__twiggy_roast_data__');
@@ -119,69 +117,87 @@
       const [packagingCostPerKg, setPackagingCostPerKg] = useState(130.00);
       const [transportCostPerKg, setTransportCostPerKg] = useState(100.00);
 
-      // Debounced safe local storage persist (NEVER causes render loops)
-      const saveTimeoutRef = useRef(null);
+      // Safe isolated local storage backup
       useEffect(() => {
-        if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-        saveTimeoutRef.current = setTimeout(() => {
+        const timer = setTimeout(() => {
           try {
             localStorage.setItem('__twiggy_roast_data__', JSON.stringify({ beans: beanTypes, batches }));
           } catch (e) {}
-        }, 300);
+        }, 400);
+        return () => clearTimeout(timer);
       }, [beanTypes, batches]);
 
       const triggerToast = (msg) => {
         setToastMsg(msg);
-        setTimeout(() => setToastMsg(''), 2500);
+        setTimeout(() => setToastMsg(''), 2800);
       };
 
-     // Hardened Google Sheet synchronization with redirect and error tracing
-      useEffect(() => {
+      // Robust JSONP Data Sync from Google Sheet (Zero CORS Blocking)
+      const fetchSheetDataJSONP = () => {
         if (!sheetUrl.trim()) return;
-        let active = true;
 
-        const testAndSyncSheet = async () => {
-          try {
-            const res = await fetch(sheetUrl.trim(), {
-              method: 'GET',
-              redirect: 'follow', // Follows Google Apps Script's 302 redirect
-            });
-
-            if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
-
-            const text = await res.text();
-            
-            // Check if Google returned an HTML login page instead of JSON
-            if (!text.trim().startsWith('{')) {
-              throw new Error('權限不足：請將 Google Apps Script 存取權限設為「任何人 (Anyone)」');
-            }
-
-            const data = JSON.parse(text);
-            if (!active) return;
-
-            if (Array.isArray(data.beans) && data.beans.length > 0) {
-              setBeanTypes(data.beans);
-            }
-            if (Array.isArray(data.batches)) {
-              setBatches(data.batches);
-            }
-
+        const callbackName = 'twiggy_cb_' + Date.now();
+        window[callbackName] = (data) => {
+          if (data && data.status === 'ok') {
+            if (Array.isArray(data.beans) && data.beans.length > 0) setBeanTypes(data.beans);
+            if (Array.isArray(data.batches) && data.batches.length > 0) setBatches(data.batches);
             setIsConnected(true);
-            triggerToast('Google Sheet 已成功連線並同步！');
-          } catch (err) {
-            if (active) {
-              console.error('Google Sheet 連線錯誤:', err);
-              setIsConnected(false);
-              triggerToast(`連線失敗: ${err.message}`);
-            }
+            triggerToast('Google Sheet 資料同步成功！');
+          } else {
+            console.warn('Google Sheet responded with warning:', data);
           }
+          delete window[callbackName];
+          const el = document.getElementById(callbackName);
+          if (el) el.remove();
         };
 
-        testAndSyncSheet();
-        return () => { active = false; };
+        const script = document.createElement('script');
+        script.id = callbackName;
+        const separator = sheetUrl.includes('?') ? '&' : '?';
+        script.src = sheetUrl.trim() + separator + 'callback=' + callbackName;
+        script.onerror = () => {
+          setIsConnected(false);
+          triggerToast('連線失敗：請確認 Apps Script 存取權限設為「任何人 (Anyone)」');
+          delete window[callbackName];
+          script.remove();
+        };
+
+        document.body.appendChild(script);
+      };
+
+      useEffect(() => {
+        fetchSheetDataJSONP();
       }, [sheetUrl]);
-      
-      // Bulletproof activeBean lookup with perpetual fallback
+
+      // Robust URL-Encoded POST Sync (Survives Google 302 Redirects)
+      const pushToGoogleSheet = async (payload) => {
+        if (!sheetUrl.trim()) return;
+        try {
+          const bodyData = JSON.stringify(payload);
+          await fetch(sheetUrl.trim(), {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({ data: bodyData }).toString()
+          });
+          console.log('Sync dispatched to Google Sheet successfully');
+        } catch (e) {
+          console.error('Google Sheet push error:', e);
+        }
+      };
+
+      const handleSyncAllToSheet = () => {
+        if (!sheetUrl.trim()) {
+          setIsConfigOpen(true);
+          triggerToast('請先填入 Google Sheet Web App 網址');
+          return;
+        }
+        pushToGoogleSheet({ action: 'SYNC_ALL', beans: beanTypes, batches: batches });
+        triggerToast('已發送全量資料同步至 Google Sheet！');
+      };
+
       const activeBean = useMemo(() => {
         return beanTypes.find(b => b.id === selectedBeanId) || beanTypes[0] || INITIAL_BEANS[0];
       }, [beanTypes, selectedBeanId]);
@@ -220,7 +236,7 @@
         setIsAddingBean(false);
 
         pushToGoogleSheet({ action: 'SYNC_ALL', beans: updated, batches });
-        triggerToast('新豆品已同步');
+        triggerToast('新豆品已同步至 Google Sheet');
       };
 
       const handleDeleteBeanType = (id, originName) => {
@@ -241,7 +257,7 @@
           setTargetMarginPct(next.targetMarginPct ?? 50);
         }
         pushToGoogleSheet({ action: 'SYNC_ALL', beans: updated, batches });
-        triggerToast(`已移除: ${originName}`);
+        triggerToast(`已從 Google Sheet 移除: ${originName}`);
       };
 
       const calcs = useMemo(() => {
@@ -307,7 +323,7 @@
         setBatches(updated);
 
         pushToGoogleSheet({ action: 'ADD_BATCH', data: newBatch });
-        triggerToast('批次已記錄');
+        triggerToast('批次已記錄並寫入 Google Sheet');
       };
 
       const handleDeleteBatch = (id) => {
@@ -319,7 +335,8 @@
       const handleSaveSheetUrl = () => {
         localStorage.setItem('__twiggy_gsheet_url__', sheetUrl.trim());
         setIsConfigOpen(false);
-        triggerToast('網址已儲存');
+        fetchSheetDataJSONP();
+        triggerToast('網址已儲存，正在連線...');
       };
 
       const handleExportExcel = () => {
@@ -378,7 +395,23 @@
               </div>
             </div>
 
-            <div className="flex items-center gap-2.5 self-start md:self-center">
+            <div className="flex items-center gap-2.5 self-start md:self-center flex-wrap">
+              {/* Force Full Sync Button */}
+              {isConnected && (
+                <button
+                  type="button"
+                  onClick={handleSyncAllToSheet}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 text-xs font-semibold rounded-xl bg-white border border-roast-200 text-roast-800 hover:bg-roast-100 transition shadow-sm"
+                  title="將目前所有豆單與批次完整寫入 Google Sheet"
+                >
+                  <svg className="w-3.5 h-3.5 text-copper-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  <span>全部同步至雲端 (Sync All)</span>
+                </button>
+              )}
+
+              {/* Google Sheets Connection Modal Trigger */}
               <button
                 type="button"
                 onClick={() => setIsConfigOpen(!isConfigOpen)}
@@ -405,7 +438,7 @@
             </div>
           </nav>
 
-          {/* Config Modal */}
+          {/* Config Drawer */}
           {isConfigOpen && (
             <div className="mb-8 p-5 rounded-2xl bg-white border border-emerald-200 shadow-md">
               <div className="flex justify-between items-center mb-2">
@@ -413,7 +446,7 @@
                 <span className="text-[11px] text-stone-400">跨裝置自動同步</span>
               </div>
               <p className="text-xs text-stone-500 mb-4">
-                請貼入 Google Apps Script 部署取得的 <strong>網頁應用程式網址 (Web App URL)</strong>：
+                請在下方貼入您在 Google Apps Script 部署取得的 <strong>網頁應用程式網址 (Web App URL，結尾必須為 /exec)</strong>：
               </p>
               <div className="flex flex-col sm:flex-row gap-2">
                 <input
@@ -516,7 +549,7 @@
                   </div>
                 </div>
 
-                {/* Manage Beans */}
+                {/* Manage Beans Drawer */}
                 {isManagingBeans && (
                   <div className="mb-6 p-4 rounded-xl bg-amber-50/70 border border-amber-200">
                     <div className="flex items-center justify-between mb-3">
@@ -546,7 +579,7 @@
                   </div>
                 )}
 
-                {/* Add Bean */}
+                {/* Add Bean Form */}
                 {isAddingBean && (
                   <form onSubmit={handleCreateBeanType} className="mb-6 p-4 rounded-xl bg-roast-50 border border-roast-200">
                     <h3 className="text-xs font-bold uppercase tracking-wider text-roast-700 mb-3">新增咖啡品項庫存</h3>
@@ -599,7 +632,7 @@
                         type="submit"
                         className="px-4 py-2 bg-roast-900 text-white rounded-lg text-xs font-bold hover:bg-black transition"
                       >
-                        儲存至豆單
+                        儲存至豆單並同步
                       </button>
                     </div>
                   </form>
@@ -653,7 +686,7 @@
                   </div>
                 </div>
 
-                {/* Packaging Size Selector */}
+                {/* Packaging Size Quick Buttons */}
                 <div className="mt-5 pt-4 border-t border-roast-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <span className="text-xs font-bold text-stone-700">零售包裝規格:</span>
                   <div className="flex items-center gap-1.5 flex-wrap">
@@ -799,7 +832,7 @@
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 4v16m8-8H4"/>
                     </svg>
-                    <span>確認並記錄批次</span>
+                    <span>確認並記錄批次 (Commit to Sheet)</span>
                   </button>
                 </div>
               </div>
@@ -887,7 +920,7 @@
                   {batches.length === 0 ? (
                     <tr>
                       <td colSpan="10" className="py-12 text-center text-stone-400">
-                        暫無烘焙記錄。
+                        暫無烘焙記錄。請於上方設置並點擊「確認並記錄批次」。
                       </td>
                     </tr>
                   ) : (
@@ -919,7 +952,7 @@
             </div>
           </div>
 
-          {/* Toast */}
+          {/* Toast Notification */}
           {toastMsg && (
             <div className="fixed bottom-6 right-6 bg-roast-950 text-white text-xs font-semibold px-4 py-3 rounded-xl shadow-xl flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
