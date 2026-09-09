@@ -135,39 +135,52 @@
         setTimeout(() => setToastMsg(''), 2500);
       };
 
-      // Non-blocking Google Sheet check
+     // Hardened Google Sheet synchronization with redirect and error tracing
       useEffect(() => {
         if (!sheetUrl.trim()) return;
         let active = true;
 
-        fetch(sheetUrl.trim())
-          .then(r => r.ok ? r.json() : null)
-          .then(data => {
-            if (!active || !data) return;
-            if (Array.isArray(data.beans) && data.beans.length > 0) setBeanTypes(data.beans);
-            if (Array.isArray(data.batches)) setBatches(data.batches);
-            setIsConnected(true);
-            triggerToast('已同步 Google Sheet 資料');
-          })
-          .catch(() => {
-            if (active) console.log('Sheet connection offline. Using local cache.');
-          });
+        const testAndSyncSheet = async () => {
+          try {
+            const res = await fetch(sheetUrl.trim(), {
+              method: 'GET',
+              redirect: 'follow', // Follows Google Apps Script's 302 redirect
+            });
 
+            if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
+
+            const text = await res.text();
+            
+            // Check if Google returned an HTML login page instead of JSON
+            if (!text.trim().startsWith('{')) {
+              throw new Error('權限不足：請將 Google Apps Script 存取權限設為「任何人 (Anyone)」');
+            }
+
+            const data = JSON.parse(text);
+            if (!active) return;
+
+            if (Array.isArray(data.beans) && data.beans.length > 0) {
+              setBeanTypes(data.beans);
+            }
+            if (Array.isArray(data.batches)) {
+              setBatches(data.batches);
+            }
+
+            setIsConnected(true);
+            triggerToast('Google Sheet 已成功連線並同步！');
+          } catch (err) {
+            if (active) {
+              console.error('Google Sheet 連線錯誤:', err);
+              setIsConnected(false);
+              triggerToast(`連線失敗: ${err.message}`);
+            }
+          }
+        };
+
+        testAndSyncSheet();
         return () => { active = false; };
       }, [sheetUrl]);
-
-      const pushToGoogleSheet = (payload) => {
-        if (!sheetUrl.trim()) return;
-        try {
-          fetch(sheetUrl.trim(), {
-            method: 'POST',
-            mode: 'no-cors',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: JSON.stringify(payload)
-          });
-        } catch (e) {}
-      };
-
+      
       // Bulletproof activeBean lookup with perpetual fallback
       const activeBean = useMemo(() => {
         return beanTypes.find(b => b.id === selectedBeanId) || beanTypes[0] || INITIAL_BEANS[0];
